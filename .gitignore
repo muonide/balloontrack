@@ -68,3 +68,5 @@ temp/
 
 # Documentation builds
 docs/_build/
+
+*.pdf
