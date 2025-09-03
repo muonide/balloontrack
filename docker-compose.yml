@@ -1,0 +1,45 @@
+# GPS Web Tracker Docker Compose
+
+version: '3.8'
+
+services:
+  gps-web-tracker:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - GPS_HOST=gps-server
+      - GPS_PORT=8080
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=5000
+      - LOG_LEVEL=INFO
+      - MAX_POINTS_PER_SENDER=1000
+    volumes:
+      - gps_data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - gps-server
+    networks:
+      - gps-network
+
+  # Example GPS data server (replace with your actual GPS server)
+  gps-server:
+    image: alpine:latest
+    command: >
+      sh -c "
+        echo 'GPS Server placeholder - replace with your actual GPS server';
+        echo 'This service should provide GPS data on port 8080';
+        sleep infinity
+      "
+    ports:
+      - "8080:8080"
+    networks:
+      - gps-network
+
+volumes:
+  gps_data:
+    driver: local
+
+networks:
+  gps-network:
+    driver: bridge

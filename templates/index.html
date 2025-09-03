@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Web Tracker</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>BalloonSAT Tracker</h1>
+            <div class="subtitle">Real-time GPS tracking via Iridium satellite network</div>
+        </div>
+    </div>
+    
+    <div class="status-bar">
+        <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+        <div class="controls">
+            <button class="btn btn-primary" onclick="refreshMap()">
+                <span class="btn-text">Refresh Map</span>
+            </button>
+            <button class="btn btn-secondary" onclick="refreshSummary()">
+                <span class="btn-text">Refresh Summary</span>
+            </button>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="sidebar">
+            <h3>Tracked Senders</h3>
+            <div id="senderSummary">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+        
+        <div class="map-container">
+            <div id="mapFrame" class="map-frame">
+                <div class="loading">Loading map...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        // Connection status handling
+        socket.on('connect', function() {
+            console.log('Connected to server');
+        });
+        
+        socket.on('disconnect', function() {
+            console.log('Disconnected from server');
+            updateStatus(false);
+        });
+        
+        socket.on('status', function(data) {
+            updateStatus(data.connected);
+        });
+        
+        // Real-time GPS updates
+        socket.on('gps_update', function(data) {
+            console.log('GPS update received:', data);
+            updateSenderSummary(data.sender_summary);
+            // Auto-refresh map after new data
+            setTimeout(refreshMap, 1000);
+        });
+        
+        function updateStatus(connected) {
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            
+            if (connected) {
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connected';
+            } else {
+                statusDot.classList.remove('connected');
+                statusText.textContent = 'Disconnected';
+            }
+        }
+        
+        function refreshMap() {
+            const mapFrame = document.getElementById('mapFrame');
+            
+            // Show loading indicator
+            mapFrame.innerHTML = '<div class="loading">🔄 Refreshing map...</div>';
+            
+            // Fetch map HTML directly
+            fetch('/api/map?' + new Date().getTime())
+                .then(response => {
+                    console.log('Map response status:', response.status);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.text();
+                })
+                .then(html => {
+                    console.log('Map HTML received, length:', html.length);
+                    mapFrame.innerHTML = html;
+                    
+                    // Force Leaflet to resize after a short delay
+                    setTimeout(() => {
+                        if (window.L) {
+                            // Find any Leaflet map instances and invalidate size
+                            const mapElements = mapFrame.querySelectorAll('.leaflet-container');
+                            mapElements.forEach(mapEl => {
+                                if (mapEl._leaflet_id) {
+                                    const map = window.L.map._registry[mapEl._leaflet_id];
+                                    if (map && map.invalidateSize) {
+                                        map.invalidateSize();
+                                    }
+                                }
+                            });
+                        }
+                    }, 500);
+                })
+                .catch(error => {
+                    console.error('Error loading map:', error);
+                    mapFrame.innerHTML = `<div class="error">❌ Error loading map: ${error.message}</div>`;
+                });
+        }
+        
+        function refreshSummary() {
+            fetch('/api/summary')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => updateSenderSummary(data))
+                .catch(error => {
+                    console.error('Error fetching summary:', error);
+                    const container = document.getElementById('senderSummary');
+                    container.innerHTML = `<div class="error">❌ Error loading data: ${error.message}</div>`;
+                });
+        }
+        
+        function updateSenderSummary(summary) {
+            const container = document.getElementById('senderSummary');
+            
+            if (Object.keys(summary).length === 0) {
+                container.innerHTML = '<div class="no-data">No GPS data received yet</div>';
+                return;
+            }
+            
+            let html = '';
+            for (const [sender, info] of Object.entries(summary)) {
+                // Format altitude display
+                let altitudeDisplay = '';
+                if (info.altitude !== null && info.altitude !== undefined) {
+                    const trendIcon = getTrendIcon(info.altitude_trend);
+                    const trendClass = `altitude-trend-${info.altitude_trend}`;
+                    let changeText = '';
+                    
+                    if (info.altitude_change !== 0) {
+                        const sign = info.altitude_change > 0 ? '+' : '';
+                        changeText = ` (${sign}${info.altitude_change}m)`;
+                    }
+                    
+                    altitudeDisplay = `
+                        <div class="altitude-info">
+                            <strong>Altitude:</strong> 
+                            <span class="${trendClass}">
+                                ${info.altitude}m ${trendIcon}${changeText}
+                            </span>
+                        </div>
+                    `;
+                }
+                
+                html += `
+                    <div class="sender-card">
+                        <div class="sender-header">${sender}</div>
+                        <div class="sender-info">
+                            <strong>Points:</strong> ${info.total_points}<br>
+                            <strong>Position:</strong> ${info.latest_position[0].toFixed(6)}, ${info.latest_position[1].toFixed(6)}<br>
+                            ${altitudeDisplay}
+                            <strong>Last Update:</strong> ${info.latest_time || 'Unknown'}
+                        </div>
+                        ${info.emergency_active ? '<div class="emergency-alert">⚠️ EMERGENCY ACTIVE</div>' : ''}
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+        }
+        
+        function getTrendIcon(trend) {
+            switch(trend) {
+                case 'rising':
+                    return '📈';
+                case 'falling':
+                    return '📉';
+                case 'stable':
+                default:
+                    return '➡️';
+            }
+        }
+        
+        // Initial data load
+        refreshSummary();
+        refreshMap();
+        
+        // Periodic refresh
+        setInterval(refreshSummary, 30000); // Refresh every 30 seconds
+    </script>
+</body>
+</html>
